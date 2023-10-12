@@ -19,8 +19,10 @@ YT_CONST = "https://www.youtube.com/watch?v="
 # temporary file paths
 TRANSCRIPT_PATH = os.path.join("evadb_data", "tmp", "transcript.csv")
 SUMMARY_PATH = os.path.join("evadb_data", "tmp", "summary.csv")
+TRANSCRIPT_DIR = 'transcripts'
 
 global video_links
+video_links = {}
 
 def receive_user_input():
     """Receives user input.
@@ -35,15 +37,15 @@ def receive_user_input():
                 "🌐 Enter the URL of the YouTube video (press Enter when done): "
             ))
 
-        if video_link == "":
-            break
+        if video_link == "": video_link = DEFAULT_VIDEO_LINK
 
         # Check if the URL is a valid YouTube URL
         if video_link.startswith(YT_CONST):
             youtube_id = video_link.split("v=")[1]
             youtube = YouTube(video_link)
             video_title = youtube.title
-            video_links[youtube_id] = video_title 
+            video_links[youtube_id] = video_title
+            break
 
         else:
             print("⚠️ Please enter a valid YouTube URL.\n")
@@ -119,14 +121,12 @@ def group_transcript(transcript: dict):
     return new_line
 
 
-def download_youtube_video_transcript(video_link: str):
+def download_youtube_video_transcript(video_id: str):
     """Downloads a YouTube video's transcript.
 
     Args:
         video_link (str): url of the target YouTube video.
     """
-    video_id = extract.video_id(video_link)
-    print("⏳ Transcript download in progress...")
     transcript = YouTubeTranscriptApi.get_transcript(video_id)
     print("✅ Video transcript downloaded successfully.")
     return transcript
@@ -233,17 +233,28 @@ def write_transcript_to_file(youtube_id, transcript):
         youtube_id (str): The YouTube video ID.
         transcript (str): The transcript to write.
     """
-    with open(f"{youtube_id}.txt", "w") as file:
+    # Create the transcript directory if it doesn't exist
+    if not os.path.exists(TRANSCRIPT_DIR):
+        os.makedirs(TRANSCRIPT_DIR)
+
+    # Write the transcript file in the transcript directory
+    with open(os.path.join(TRANSCRIPT_DIR, f"{youtube_id}.txt"), "w") as file:
         file.write(transcript)
 
-def list_transcripts():
+
+def list_videos():
     """Lists all available transcripts.
 
     Returns:
         transcripts (list): A list of available transcripts.
     """
-    transcripts = [f for f in os.listdir() if f.endswith(".txt")]
-    return transcripts
+    # Print every video name
+    for i, (youtube_id, youtube_title) in enumerate(video_links.items()):
+        print(f"{i}. {youtube_title}")
+
+    # Prompt the user to select a video
+    selected = int(input("Enter the number of the video: "))
+
 
 def read_transcript(youtube_id):
     """Reads a transcript from a text file.
@@ -254,9 +265,8 @@ def read_transcript(youtube_id):
     Returns:
         transcript (str): The transcript.
     """
-    with open(f"{youtube_id}.txt", "r") as file:
+    with open(os.path.join(TRANSCRIPT_DIR, f"{youtube_id}.txt"), "r") as file:
         return file.read()
-
 
 if __name__ == "__main__":
 
@@ -274,20 +284,18 @@ if __name__ == "__main__":
             inputting = str(input(
                 "\nWould you like to add an additional Video? (enter 'yes' if so): ")).lower() in ["y", "yes"]
 
-        for youtube_id, video_link in video_links["video_links"].items():
-            transcript = download_youtube_video_transcript(video_link)
+        for youtube_id, video_link in video_links.items():
+            # Check if a transcript file already exists
+            if os.path.exists(os.path.join(TRANSCRIPT_DIR, f"{youtube_id}.txt")): continue
+            transcript = download_youtube_video_transcript(youtube_id)
+
+            # Group the list of transcripts into a single raw transcript.
+            if transcript is not None: transcript = group_transcript(transcript)
             write_transcript_to_file(youtube_id=youtube_id, transcript=transcript)
 
-
-        raw_transcript_string = None
-
-        # Group the list of transcripts into a single raw transcript.
-        if transcript is not None:
-            raw_transcript_string = group_transcript(transcript)
-
         # Partition the transcripts if they are too big to circumvent LLM token restrictions.
-        if raw_transcript_string is not None:
-            partitioned_transcript = partition_transcript(raw_transcript_string)
+        if transcript is not None:
+            partitioned_transcript = partition_transcript(transcript)
             df = pd.DataFrame(partitioned_transcript)
             df.to_csv(TRANSCRIPT_PATH)
 

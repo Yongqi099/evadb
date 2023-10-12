@@ -12,12 +12,12 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 MAX_CHUNK_SIZE = 1000
 DEFAULT_VIDEO_LINK = "https://www.youtube.com/watch?v=0E_wXecn4DU&pp=ygUKZGFpbHkgZG9zZQ%3D%3D"
+SECOND_DEFAULT_LINK = "https://www.youtube.com/watch?v=42m9WKQ0jC0&pp=ygUKZGFpbHkgZG9zZQ%3D%3D"
 
-APP_SOURCE_DIR = os.path.abspath(os.path.dirname(__file__))
 YT_CONST = "https://www.youtube.com/watch?v="
 
 # temporary file paths
-TRANSCRIPT_PATH = os.path.join("evadb_data", "tmp", "transcript.csv")
+TRANSCRIPT_PATH = os.path.join("evadb_data", "tmp")
 SUMMARY_PATH = os.path.join("evadb_data", "tmp", "summary.csv")
 TRANSCRIPT_DIR = 'transcripts'
 
@@ -249,11 +249,26 @@ def list_videos():
         transcripts (list): A list of available transcripts.
     """
     # Print every video name
-    for i, (youtube_id, youtube_title) in enumerate(video_links.items()):
-        print(f"{i}. {youtube_title}")
+    for i, title in enumerate(video_links.values()):
+        print(f"{i}. {title}")
 
-    # Prompt the user to select a video
-    selected = int(input("Enter the number of the video: "))
+    # Prompt the user to select a video number that correspond with a key
+    while True:
+        # Ask the user for input
+        video_number = input("Enter the number of the video: ")
+
+        # Try to convert the input to an integer
+        video_number = int(video_number)
+
+        # Check if the number is in the valid range
+        if 0 <= video_number < len(video_links):
+            # If it is, break the loop
+            break
+        else:
+            print(f"Please enter a number between 0 and {len(video_links) - 1}.")
+
+    # Return the corresponding key
+    return list(video_links.keys())[video_number]
 
 
 def read_transcript(youtube_id):
@@ -268,6 +283,51 @@ def read_transcript(youtube_id):
     with open(os.path.join(TRANSCRIPT_DIR, f"{youtube_id}.txt"), "r") as file:
         return file.read()
 
+def query_video(youtube_id: str):
+
+    transcript = read_transcript(youtube_id)
+
+    # Partition the transcripts if they are too big to circumvent LLM token restrictions.
+    if transcript is not None:
+        partitioned_transcript = partition_transcript(transcript)
+        df = pd.DataFrame(partitioned_transcript)
+        # Name the CSV file based on the youtube_id and save it in the directory specified by TRANSCRIPT_PATH
+        path = os.path.join(TRANSCRIPT_PATH, f"{youtube_id}.csv")
+        df.to_csv(path)
+
+    # load chunked transcript into table
+
+    # Replace spaces with underscores
+    video_title = video_links.get(youtube_id).replace(' ', '_')
+    # Remove special characters
+    video_title = ''.join(e for e in video_title if e.isalnum() or e == '_')
+
+    # Create a new table named based on the youtube_id
+    cursor.query(f"""CREATE TABLE IF NOT EXISTS {video_title}_Transcript (text TEXT(50));""").execute()
+    # Load the CSV file into the table
+    cursor.load(path, f"{video_title}_Transcript", "csv").execute()
+
+    separator = "===========================================\n"
+    print(separator)
+    print("🪄 Ask anything about the video!")
+    ready = True
+    while ready:
+        question = str(input("Question (enter 'exit' to exit): "))
+        if question.lower() == "exit":
+            ready = False
+        else:
+            # Generate response with chatgpt udf
+            print("⏳ Generating response (may take a while)...")
+            response = generate_response(cursor, question)
+            print(separator)
+            print("✅ Answer:")
+            print(response)
+            print(separator)
+
+    print("✅ Session ended.")
+    print(separator)
+
+
 if __name__ == "__main__":
 
     print(
@@ -277,12 +337,12 @@ if __name__ == "__main__":
         # establish evadb api cursor
         cursor = evadb.connect().cursor()
 
-
         inputting = True
         while inputting:
             receive_user_input()
             inputting = str(input(
                 "\nWould you like to add an additional Video? (enter 'yes' if so): ")).lower() in ["y", "yes"]
+
 
         for youtube_id, video_link in video_links.items():
             # Check if a transcript file already exists
@@ -293,19 +353,6 @@ if __name__ == "__main__":
             if transcript is not None: transcript = group_transcript(transcript)
             write_transcript_to_file(youtube_id=youtube_id, transcript=transcript)
 
-        # Partition the transcripts if they are too big to circumvent LLM token restrictions.
-        if transcript is not None:
-            partitioned_transcript = partition_transcript(transcript)
-            df = pd.DataFrame(partitioned_transcript)
-            df.to_csv(TRANSCRIPT_PATH)
-
-        # load chunked transcript into table
-        cursor.drop_table("Transcript", if_exists=True).execute()
-        cursor.query(
-            """CREATE TABLE IF NOT EXISTS Transcript (text TEXT(50));"""
-        ).execute()
-        cursor.load(TRANSCRIPT_PATH, "Transcript", "csv").execute()
-
         # get OpenAI key if needed
         try:
             api_key = os.environ["OPENAI_KEY"]
@@ -313,25 +360,11 @@ if __name__ == "__main__":
             api_key = str(input("🔑 Enter your OpenAI key: "))
             os.environ["OPENAI_KEY"] = api_key
 
-        print("===========================================")
-        print("🪄 Ask anything about the video!")
-        ready = True
-        while ready:
-            question = str(input("Question (enter 'exit' to exit): "))
-            if question.lower() == "exit": ready = False
-            else:
-                # Generate response with chatgpt udf
-                print("⏳ Generating response (may take a while)...")
-                response = generate_response(cursor, question)
-                print("+--------------------------------------------------+")
-                print("✅ Answer:")
-                print(response)
-                print("+--------------------------------------------------+")
+        querying = True
+        while querying:
+            choice = list_videos()
+            query_video(choice)
 
-        cleanup()
-        print("✅ Session ended.")
-        print("===========================================")
     except Exception as e:
-        cleanup()
         print("❗️ Session ended with an error.")
         print(e)

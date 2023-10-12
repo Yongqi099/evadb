@@ -1,6 +1,4 @@
 evadb==0.2.14
-transformers
-eva-decord
 openai
 youtube_transcript_api>=0.6.0
 pytube>=15.0.0
